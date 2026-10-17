@@ -1,3 +1,4 @@
+import { retireOrphanedClientBrowserPage } from './runtime-browser-orphaned-page-close'
 import { BrowserError } from '../browser/browser-error'
 import {
   BROWSER_UNAVAILABLE_ERROR_CODE,
@@ -15,8 +16,8 @@ import type { RuntimeBrowserCommands } from './browser/browser-commands'
  * is free; constructing it is what drags the cluster in.
  *
  * The desktop installs the Electron factory. A Node host installs an external provider
- * when one resolves; otherwise every browser RPC rejects with the closed
- * `browser_unavailable` code and capability filtering hides the affordance.
+ * when one resolves; otherwise automation rejects with `browser_unavailable`.
+ * Explicit retirement of retained, unplaced client pages does not need a provider.
  *
  * Deliberately NOT a stub object with silently-succeeding methods: that is the
  * "looks fine, returns a lie" shape this codebase rejects. Absent means rejected.
@@ -96,16 +97,30 @@ export function runtimeBrowserUnavailableCause(): RuntimeBrowserUnavailableCause
 }
 
 /**
- * Build the commands, or a rejecting proxy when this host has no browser. The proxy
- * throws per call rather than at construction so the runtime still starts — the
- * capability is simply not advertised.
+ * Keep explicit orphan retirement independent of the provider. Other calls still
+ * reject when this host has no browser, without preventing runtime startup.
  */
 export function createRuntimeBrowserCommands(
   host: RuntimeBrowserCommandHost
 ): RuntimeBrowserCommands {
-  if (currentFactory) {
-    return currentFactory(host)
-  }
+  const commands = currentFactory?.(host) ?? unavailableBrowserCommands()
+  return new Proxy(commands, {
+    get: (target, property) => {
+      if (property === 'browserTabClose') {
+        return async (params: Parameters<RuntimeBrowserCommands['browserTabClose']>[0]) => {
+          if (await retireOrphanedClientBrowserPage(host, params)) {
+            return { closed: true }
+          }
+          return target.browserTabClose(params)
+        }
+      }
+      // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: preserve the provider's existing property lookup for every non-close member.
+      return target[property as keyof RuntimeBrowserCommands]
+    }
+  })
+}
+
+function unavailableBrowserCommands(): RuntimeBrowserCommands {
   return new Proxy({} as RuntimeBrowserCommands, {
     get: (_target, property) => {
       if (property === 'then') {

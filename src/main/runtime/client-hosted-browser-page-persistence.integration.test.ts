@@ -1,3 +1,4 @@
+import { setRuntimeBrowserCommandsFactory } from './runtime-browser-commands-factory'
 /**
  * Drives the runtime's own wiring: a real OrcaRuntimeService, the real page registry, and the real
  * session-tabs announcement every client-page mutation already goes through.
@@ -108,6 +109,23 @@ function attachHost(runtime: OrcaRuntimeService) {
 }
 
 describe('client-hosted browser page persistence through the runtime', () => {
+  it('persists an explicit close of a restored page without a browser provider', async () => {
+    setRuntimeBrowserCommandsFactory(null)
+    const profile = createProfile()
+    const first = startRuntime(profile)
+    attachHost(first)
+    placeAndPublish(first, 'page-a')
+    first.notifyMobileSessionTabsChanged(WT)
+    const replacement = startRuntime(profile)
+
+    await expect(replacement.browserTabClose({ page: 'page-a' })).resolves.toEqual({ closed: true })
+
+    expect(getRuntimeBrowserPageRegistry(replacement).getPage('page-a')).toBeUndefined()
+    expect(profile.session.clientHostedBrowserPagesByWorktree?.[WT] ?? []).toEqual([])
+    const restarted = startRuntime(profile)
+    expect(getRuntimeBrowserPageRegistry(restarted).getPage('page-a')).toBeUndefined()
+  })
+
   it('writes the page into the session the announcement already fires on', () => {
     const profile = createProfile()
     const runtime = startRuntime(profile)
